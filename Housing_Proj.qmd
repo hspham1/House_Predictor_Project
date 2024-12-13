@@ -1,0 +1,288 @@
+---
+title: "Stat 206 Final Project"
+subtitle: "STAT 206"
+author: "Ha Pham"
+date: "2024-12-01"
+echo: true
+format:
+  html:
+    toc: true
+    toc-location: left
+    embed-resources: true
+    code-line-numbers: true
+  pdf:
+    code-line-numbers: true
+error: true
+cache: true
+---
+
+# Project and Description:
+
+## 1. Introduction:
+
+In this project, we will use variations of linear regression model to predict the median housing price of a residential block or district in California. The dataset is obtained from the US Census Bureau for California in 2022. It offers 10 types of metrics for predicting the average house price of a block of residential buildings in California, each metric is a column in the dataset table. A district or block group is the smallest geographical unit for which the US Census Bureau sample the data. The population for each district ranges from 600 to 3000 people. There are 20640 districts in the project dataset (ie 20640 rows in the table).
+
+## 2. Methods:
+
+One common but very effective model for relating some input metrics $\mathbf{x}$ to an output estimate $\mathbf{y}$ is by using **Linear Regression**.
+
+$$
+\mathbf{a} \mathbf{x} + \mathbf{b} = \mathbf{y}
+$$ where $\mathbf{a}$ is the linear coefficient and $\mathbf{b}$ is the bias or intercept. Furthermore, one common loss function used to evaluate the training of this model prediction is by using Least Squares:
+
+$$
+\min_{\beta}~ \|\mathbf{y} - \mathbf{X}\beta\|^{2} 
+$$
+
+In this project, I will explore evaluating a linear model with using 2 additional methods:
+
+-   ***Weighted Least Squares.*** This is useful if you believe in addition to the input metric X, there is some other metrics $\mathbf{w}$ that effectively skew how much we should emphasize the impact of this training prediction instance on our overall model.
+
+```         
+$$
+\min_{\beta}~\|\mathbf{y} - \mathbf{X}\beta\|^{2} * \mathbf{w} 
+$$
+
+-   **Method 1: Using sample variance to calculate weights**
+
+    -   Wii = 1/s_c\^2 where s_c is the sample variance of some group of datasets
+
+-   **Method2: Using group means to calculate weights**
+
+    -   Wii = 1/\|y - mu\|\^2 where mu is the group means
+```
+
+# Data Exploration
+
+## 1. Reading data
+
+You see that these statistics are by district of houses, not per house. First impression from looking at dataset, total rooms and bedrooms should correlate to population in the district. It seems median_income of the district would have highest correlation to median_house_value, which is our model prediction. Ocean proximity is some sets of characters that currently don't mean anything. Longitude and Latitude by themselves are not very meaningful for predicting house price.
+
+```{r}
+house_data <- read.csv(file="housing_data.csv")
+summary(house_data)
+```
+
+```{r}
+colnames(house_data)
+
+```
+
+```{r}
+dim(house_data)
+```
+
+## 2. Data Cleanup
+
+Check if there is any Null value in the dataset and remove them from the dataset
+
+```{r}
+count_rows_with_null <- function(df) {
+  sum(apply(df, 1, function(row) any(is.na(row))))
+}
+count_rows_with_null(house_data)
+```
+
+```{r}
+clean_index <- vector()
+for (i in 1:nrow(house_data)) {
+  if (any(is.na(house_data[i,]))){
+    clean_index <- append(clean_index,FALSE)
+  }
+  else{
+    clean_index <- append(clean_index,TRUE)
+    
+  }
+}
+house_data <- house_data[clean_index,]
+dim(house_data)
+```
+
+Notice that the column "ocean_proximity" is currently some sets of characters which is not very useful. We convert these to categorical values.
+
+```{r}
+# turn character column "ocean_proximity" into factors
+house_data$ocean_proximity <- as.factor(house_data$ocean_proximity)
+plot(house_data$ocean_proximity)
+```
+
+```{r}
+plot(house_data$ocean_proximity, house_data$median_house_value)
+```
+
+## 3. Handling Outlier
+
+Let's plot the median_income versus median_house_value
+
+```{r}
+plot(house_data$median_income,house_data$median_house_value)
+title(main="Median House Value by Median Income in CA",
+      xlab = "Income",
+      ylab = "House Value")
+```
+
+Here we see that individual with the top median_income of \>14 are outliers in the dataset, so let's remove them
+
+```{r}
+house_data <- house_data[house_data$median_income<=14,]
+dim(house_data)
+```
+
+We can also see that there is a set of houses that have really high prices not explainable by median income. We also remove those outliers
+
+```{r}
+house_data <- house_data[house_data$median_house_value<=4.5e5,]
+dim(house_data)
+```
+
+```{r}
+plot(house_data$median_income,house_data$median_house_value)
+title(main="Median House Value by Median Income in CA",
+      xlab = "Income",
+      ylab = "House Value")
+```
+
+## 4. Establish biase
+
+In order to help us hone in on which metrics to prioritize in our model, let's first do a quick generalized linear model fit of the dataset so far
+
+```{r}
+lm_model <- lm(house_data$median_house_value ~ ., data = house_data)
+plot(lm_model)
+```
+
+```{r}
+summary(lm_model)
+```
+
+-   This linear fit confirms our observation that median_house_value in a district correlates most greatly with median_income.
+
+-   There seem to also be some difference in variances of ocean_proximity
+
+# Implementation
+
+## Preparing the test data:
+
+### 1. Exact group variance
+
+```{r}
+# One method we will use is assign weights to the least squares loss function, using the variances of each 
+# ocean_proximity group. 
+# In this code, we calculate the sample price variances according to each ocean_proximity category
+# NOTE: variance is the squared difference from the mean, so it makes sense to be this high!
+house_data$prox_price_variance <- ave(house_data$median_house_value,house_data$ocean_proximity,FUN = var)
+summary(house_data)
+```
+
+### 2. Extract group means
+
+```{r}
+mean_median_house_value <- mean(house_data$median_house_value)
+house_data$group_means <- house_data$median_house_value/mean_median_house_value
+summary(house_data)
+```
+
+```{r}
+library(caret)
+# perform a stratified split to obtain 30% test and 70% training from the dataset
+# Stratified sampling
+set.seed(123)
+train_index <- createDataPartition(house_data$median_house_value, p = 0.7, list = FALSE)
+
+# Split into training and test sets
+train_data <- house_data[train_index, ]
+test_data <- house_data[-train_index, ]
+dim(train_data)
+```
+
+## Weighted Least Squares Implementation
+
+The code below sets up the linear model with parameter theta, and then make an objective function with the inputs, model, and weights
+
+```{r}
+linear_model <- function(x, theta){
+  # theta is the parameters of the linear objective function
+  intercept <- theta[1]
+  slope <- theta[2]
+  pred <- intercept + slope * x
+  return(pred)
+}
+
+# This is the weighted least squares of the Linear Model objective function
+make_weighted_objective_func <- function(x,y,model,weights){
+  f <- function(theta){
+    residuals <- y - model(x,theta)
+    # The residuals^2 is corrected by some defined weights
+    sum(weights*residuals^2)
+  }
+  return(f)
+}
+```
+
+### 1. Using sample variances grouped by ocean_proximity to calculate weights
+
+In this implementation we use variances of median_house_value based on ocean_proximity as the weights for the objective function
+
+```{r}
+library(autodiffr)
+group_var_weights = 1/train_data$prox_price_variance
+
+weighted_variances_mse <- make_weighted_objective_func(train_data$median_income,train_data$median_house_value,linear_model,group_var_weights)
+
+var_weighted_grad.mse <- function(theta){
+  return(ad_grad(weighted_variances_mse,theta))
+}
+
+# initial guess, theta0
+theta0 <- c(1,1)
+weighted_var_fit <- optim(theta0,weighted_variances_mse,var_weighted_grad.mse,method="BFGS")
+```
+
+### 2. Using group means to calculate weights
+
+```{r}
+group_mean_weights = 1/abs(train_data$median_house_value-train_data$group_means)^2
+
+weighted_means_mse <- make_weighted_objective_func(train_data$median_income,train_data$median_house_value,linear_model,group_mean_weights)
+
+means_weighted_grad.mse <- function(theta){
+  return(ad_grad(weighted_variances_mse,theta))
+}
+
+# initial guess, theta0
+theta0 <- c(1,1)
+weighted_means_fit <- optim(theta0,weighted_means_mse,means_weighted_grad.mse,method="BFGS")
+```
+
+# Conclusion
+
+```{r}
+cat("Optimized Sample Variance Weighted LS Intercept:", weighted_var_fit$par[1], "\n")
+cat("Optimized Sample Variance Weighted LS Slope:", weighted_var_fit$par[2], "\n")
+cat("Optimized Sample Variance Weighted LS MSE:", weighted_var_fit$value[1], "\n")
+cat("Optimized Sample Variance Weighted LS steps to convergence:", weighted_var_fit$counts, "\n")
+```
+
+```{r}
+cat("Optimized Group Means Weighted LS Intercept:", weighted_means_fit$par[1], "\n")
+cat("Optimized Group Means Weighted LS Slope:", weighted_means_fit$par[2], "\n")
+cat("Optimized Group Means Weighted LS MSE:", weighted_means_fit$value[1], "\n")
+cat("Optimized Group Means Weighted LS Steps to convergence:", weighted_means_fit$counts, "\n")
+```
+
+```{r}
+lin_fit <- lm(train_data$median_house_value~train_data$median_income,data=train_data)
+y_pred <- predict(lin_fit,test_data)
+lin_fit.mse <- mean((test_data$median_house_value - y_pred)^2)
+cat("Optimized Group Means Unweighted LS Intercept:", coef(lin_fit)[1], "\n")
+cat("Optimized Group Means Unweighted LS Slope:", coef(lin_fit)[2], "\n")
+cat("Optimized Group Means Unweighted LS MSE:",lin_fit.mse , "\n")
+```
+
+## Takeaways:
+
+-   This housing dataset suffers from huge variances that rise with increasing prices. To correct for this in our linear regression, we must apply some weights to the Least Squares Loss/Objective Function
+
+-   Finding some clusters in the dataset, in this case by ocean_proximity, we can create weight vectors that are inverse of the variances in these clusters. This does well to decrease the Mean Squared Errors of the model at a very quick convergence rate of just 5 steps.
+
+-   However, we can achieve even lower Mean Squared Errors by using 1/\|y - mu\|\^2 as our weight vector, where mu is the group means of the whole dataset. This comes with longer convergence time of 32 steps.
